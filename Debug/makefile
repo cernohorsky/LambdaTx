@@ -63,8 +63,8 @@ all: main-build
 main-build: stm32f401cdu6_Audio.elf secondary-outputs
 
 # Tool invocations
-stm32f401cdu6_Audio.elf stm32f401cdu6_Audio.map: $(OBJS) $(USER_OBJS) C:\Users\r.cernohorsky\Downloads\stm32f401cdu6_Audio-main\STM32F401CDUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "stm32f401cdu6_Audio.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\r.cernohorsky\Downloads\stm32f401cdu6_Audio-main\STM32F401CDUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="stm32f401cdu6_Audio.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+stm32f401cdu6_Audio.elf stm32f401cdu6_Audio.map: $(OBJS) $(USER_OBJS) C:\Users\r.cernohorsky\OneDrive\ -\ Microdrones\ GmbH\Documents\git\LambdaTx\STM32F401CDUX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "stm32f401cdu6_Audio.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m4 -T"C:\Users\r.cernohorsky\OneDrive - Microdrones GmbH\Documents\git\LambdaTx\STM32F401CDUX_FLASH.ld" --specs=nosys.specs -Wl,-Map="stm32f401cdu6_Audio.map" -Wl,--gc-sections -static -u _printf_float --specs=nano.specs -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
