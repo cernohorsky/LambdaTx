@@ -70,22 +70,17 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define LED_Pin GPIO_PIN_13
-#define LED_GPIO_Port GPIOC
-#define KEY_Pin GPIO_PIN_2
-#define KEY_GPIO_Port GPIOA
-#define LCD1_CMD_Pin GPIO_PIN_4
-#define LCD1_CMD_GPIO_Port GPIOA
+#define BUTTON_Pin GPIO_PIN_13
+#define BUTTON_GPIO_Port GPIOC
+#define LED_Pin GPIO_PIN_5
+#define LED_GPIO_Port GPIOA
 #define MUTE_OUT_Pin GPIO_PIN_2
 #define MUTE_OUT_GPIO_Port GPIOB
+#define KEY_Pin GPIO_PIN_14
+#define KEY_GPIO_Port GPIOB
 #define DUMMY_OUT_Pin GPIO_PIN_10
 #define DUMMY_OUT_GPIO_Port GPIOA
-#define LCD_CMD_Pin GPIO_PIN_4
-#define LCD_CMD_GPIO_Port GPIOB
-#define LCD_RESET_Pin GPIO_PIN_8
-#define LCD_RESET_GPIO_Port GPIOB
-#define LCD_BL_Pin GPIO_PIN_9
-#define LCD_BL_GPIO_Port GPIOB
+
 /* USER CODE BEGIN Private defines */
 
 /* USER CODE END Private defines */
@@ -95,5 +90,3 @@ void Error_Handler(void);
 #endif
 
 #endif /* __MAIN_H */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

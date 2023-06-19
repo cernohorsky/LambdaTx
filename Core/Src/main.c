@@ -25,9 +25,7 @@
 /* USER CODE BEGIN Includes */
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
-#include "st7789.h"
-unsigned char *getImageData();
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -48,22 +46,18 @@ unsigned char *getImageData();
 //#define USE_I2S
 //#define   USE_SPDIF
 
-
-// from 0 to 2 SPI LCD
-#define NUMBER_OF_LCD 2
-
 //slower for float - faster for integer
 //#define USE_FLOAT_SIGMA
 
 // integration order 0 , 1 or 2
 //#define ORDER 1
-#define ORDER 2
+#define ORDER 1
 
 
 // if disabled - direct output (order 0)
 
 // if enabled - use bilinear interpolation
-#define LINEAR_INTERPOLATION
+//#define LINEAR_INTERPOLATION
 
 //**********************end user define area************!!!!!!!!
 
@@ -137,14 +131,13 @@ int16_t baudio_buffer[ASBUF_SIZE];
 I2S_HandleTypeDef hi2s2;
 DMA_HandleTypeDef hdma_spi2_tx;
 
-SPI_HandleTypeDef hspi1;
 SPI_HandleTypeDef hspi3;
 DMA_HandleTypeDef hdma_spi3_tx;
 
 TIM_HandleTypeDef htim2;
 TIM_HandleTypeDef htim3;
 
-UART_HandleTypeDef huart1;
+UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
@@ -153,14 +146,13 @@ UART_HandleTypeDef huart1;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_DMA_Init(void);
 static void MX_I2S2_Init(void);
-static void MX_SPI1_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_TIM1_Init(void);
 static void MX_TIM3_Init(void);
 static void MX_TIM2_Init(void);
+static void MX_USART2_UART_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -256,7 +248,7 @@ void init_timers()
 uint32_t AUDIO_PeriodicTC_FS_Counter;
 void retarget_put_char(char p)
 {
-	HAL_UART_Transmit(&huart1, &p, 1, 0xffffff); // send message via UART
+	HAL_UART_Transmit(&huart2, &p, 1, 0xffffff); // send message via UART
 }
 int _write(int fd, char* ptr, int len)
 {
@@ -295,7 +287,7 @@ volatile int HalfTransfer_CallBack_FS_Counter;
 
 
 //volatile fl = 0;
-uint32_t   samplesInBuff        = 0;
+uint32_t  samplesInBuff        = 0;
 int32_t   samplesInBuffH       = 0;
 int16_t * usb_SndBuffer        = 0;
 
@@ -303,23 +295,28 @@ int16_t * usb_SndBuffer        = 0;
 uint32_t  samplesInBuffScaled  = 0;
 uint32_t  readPositionXScaled  = 0;  //readPosition<<12;
 uint32_t  readSpeedXScaled     = 1.001*TIME_SCALE_FACT*USBD_AUDIO_FREQ/(float)FREQ;
-
+int frequency=123;
 
 struct LR
 {
 	int16_t L;
 	int16_t R;
+	uint32_t freq;
 };
 volatile int32_t ampL = 0;
 volatile int32_t ampR = 0;
 volatile int32_t LLL = 0;
 volatile int32_t RRR = 0;
 volatile int UsbSamplesAvail = 0;
+int zeroSamplePosition=0;
+int lastZeroSamplePosition=0;
+
 struct LR getNextSampleLR()
 {
 	struct LR res ;
 	res.L = 0;
 	res.R = 0;
+	//res.freq = 0;
 	//if(usb_SndBuffer)
 	HAL_GPIO_WritePin(LED_GPIO_Port,LED_Pin,GPIO_PIN_SET);
 
@@ -333,29 +330,66 @@ struct LR getNextSampleLR()
 		}
 
 		uint32_t readPositionIntC = readPositionXScaled>>TIME_BIT_SCALE_FACT;
-		uint32_t readPositionIntN = readPositionIntC+1;
-
+		//uint32_t readPositionIntN = readPositionIntC+1;
 
 		int16_t L  = usb_SndBuffer[readPositionIntC*2+0];//+usb_SndBuffer[readPositionIntN*2+0];
 		int16_t R  = usb_SndBuffer[readPositionIntC*2+1];//+usb_SndBuffer[readPositionIntN*2+1];
 
-#ifdef LINEAR_INTERPOLATION
-		if(readPositionIntN>=samplesInBuff)
-		{
-			readPositionIntN -= samplesInBuff;
-		}
-		int16_t LS  = usb_SndBuffer[readPositionIntN*2+0];//+usb_SndBuffer[readPositionIntN*2+0];
-		int16_t RS  = usb_SndBuffer[readPositionIntN*2+1];//+usb_SndBuffer[readPositionIntN*2+1];
+		// zero cross
+		int16_t L_previous  = usb_SndBuffer[readPositionIntC*2+2];
 
-		int32_t W1  =  readPositionXScaled>>(TIME_BIT_SCALE_FACT-BIT_SHIFT_SCALE_FACT) & ((1<<BIT_SHIFT_SCALE_FACT)-1);
-		int32_t W  =  (1<<BIT_SHIFT_SCALE_FACT)-W1;
-		res.L = (L*W+LS*W1)>>BIT_SHIFT_SCALE_FACT;
-		res.R = (R*W+RS*W1)>>BIT_SHIFT_SCALE_FACT;
-#else  //floor
+		if(L<0 && L_previous>0 && L!=0 && L!=-1 && L_previous!=0 && L_previous!=-1)
+		{
+			zeroSamplePosition=readPositionIntC*2;
+		}
+
+		int samplesCount = (zeroSamplePosition-lastZeroSamplePosition)/2;
+
+		if(samplesCount>15 && samplesCount<480)
+		{
+			int16_t LastSample = usb_SndBuffer[lastZeroSamplePosition+0];
+			int16_t nextToLastSample = usb_SndBuffer[lastZeroSamplePosition+2];
+
+			//linear interpolation
+			int32_t startOffset = -(nextToLastSample*20833)/(LastSample-nextToLastSample);
+			int32_t endOffset = -(L*20833)/(L_previous-L);
+			int32_t period= startOffset + (samplesCount-1) * 20833 + endOffset;
+
+			frequency=100000000000/period;
+
+			/*
+			int samples[20];
+			int j = 0;
+
+			for (int i=0;i<40;i=i+2)
+			{
+				samples[j] = usb_SndBuffer[lastZeroSamplePosition+i];
+				j++;
+			}
+
+			j=0;
+			*/
+			lastZeroSamplePosition=0;
+			zeroSamplePosition=0;
+		}
+		else
+		{
+			lastZeroSamplePosition=zeroSamplePosition;
+		}
+
+		if (L==0 && L_previous==0)
+		{
+			res.freq = 0;
+		}
+		else
+		{
+			res.freq = frequency;
+		}
+
 		res.L = L;
 		res.R = R;
-#endif
 	}
+
     return res;
 }
 void  AUDIO_Init(uint32_t AudioFreq, uint32_t Volume, uint32_t options)
@@ -475,30 +509,6 @@ void AUDIO_OUT_Periodic(uint16_t* pBuffer, uint32_t Size)
 		UsbSamplesAvail = samplesInBuff*((int)((float)FREQ/USBD_AUDIO_FREQ+0.5f))*2;
 	}
 
-#if (NUMBER_OF_LCD>0)
-	//calculate mean square
-	int  meansquareL = 0;
-	int  meansquareR = 0;
-	for(int s=0;s<Size/4;s++)
-	{
-		int32_t LL = pBuffer[s*2];
-		int32_t RR = pBuffer[s*2+1];
-		meansquareL += (LL*LL)>>USB_DATA_BITS_H;
-		meansquareR += (RR*RR)>>USB_DATA_BITS_H;
-	}
-	float scale = 1;
-	if(Size)
-		scale = (1<<USB_DATA_BITS_H)*4.0f/Size;
-	meansquareL = sqrtf(meansquareL*scale);
-	meansquareR = sqrtf(meansquareR*scale);
-	//ampL = ampL*0.99f+summL*0.01f;
-	//ampR = ampR*0.99f+summR*0.01f;
-	if(meansquareL>ampL)
-		ampL =meansquareL;
-	if(meansquareR>ampR)
-		ampR =meansquareR;
-#endif
-	return 0;
 }
 
 typedef struct
@@ -726,12 +736,16 @@ void readDataTim(int offset)
 #endif
 #else //integer sigma
 #if (ORDER==1)
-	for(int k=0;k<N_SIZE/2;k++)
-	{
-		struct LR tt =getNextSampleLR(/*k+ASBUF_SIZE/4*/);
-		VoiceBuff0[k+offset] =sigma_delta_SCALED(&static_L_channel_SCALED,((MAX_VOL)*(tt.L+(1<<USB_DATA_BITS_H)))>>(USB_DATA_BITS-SIGMA_BITS));
-		VoiceBuff1[k+offset] =sigma_delta_SCALED(&static_R_channel_SCALED,((MAX_VOL)*(tt.R+(1<<USB_DATA_BITS_H)))>>(USB_DATA_BITS-SIGMA_BITS));
-	}
+	VoiceBuff0[0] = 0;
+	VoiceBuff1[0] = 0;
+	struct LR tt =getNextSampleLR(/*k+ASBUF_SIZE/4*/);
+	//for(int k=0;k<N_SIZE/2;k++)
+	//{
+	//	struct LR tt =getNextSampleLR(/*k+ASBUF_SIZE/4*/);
+	//	VoiceBuff0[k+offset] =sigma_delta_SCALED(&static_L_channel_SCALED,((MAX_VOL)*(tt.L+(1<<USB_DATA_BITS_H)))>>(USB_DATA_BITS-SIGMA_BITS));
+	//	VoiceBuff1[k+offset] =sigma_delta_SCALED(&static_R_channel_SCALED,((MAX_VOL)*(tt.R+(1<<USB_DATA_BITS_H)))>>(USB_DATA_BITS-SIGMA_BITS));
+	//}
+
 #endif
 #if (ORDER==2)
 	for(int k=0;k<N_SIZE/2;k++)
@@ -747,6 +761,7 @@ void TIM1_TC1()
 {
 
     checkTime();
+    /*
     if(UsbSamplesAvail > N_SIZE/2)
     {
     	UsbSamplesAvail -= N_SIZE/2;
@@ -755,6 +770,7 @@ void TIM1_TC1()
     {
     	UsbSamplesAvail = 0;
     }
+    */
 	TransferComplete_CallBack_FS_Counter++;
 	readDataTim(N_SIZE/2);
 }
@@ -1000,245 +1016,6 @@ void HAL_I2S_ErrorCallback(I2S_HandleTypeDef *hi2s)
 #define PI 3.14159265358979323846
 #define TAU (2.0 * PI)
 
-int LCD_TYPE = 1;
-//#define LCD_TYPE 1
-unsigned char* getLCD_Data()
-{
-	return (LCD_TYPE==0)?getImageData():getImageDataDual();
-}
-
-vec2f getPixelCenterRot(int channel)
-{
-	if(LCD_TYPE==0)
-	{
-		vec2f pixelCenterRot = {121,167};
-		return pixelCenterRot;
-	}
-	if(channel==0)
-	{
-		vec2f pixelCenterRot = {121,150};
-		return pixelCenterRot;
-	}
-	else
-	{
-		vec2f pixelCenterRot = {121,280};
-		return pixelCenterRot;
-	}
-}
-float getPixelLength(int channel)
-{
-	if(LCD_TYPE==0)
-	{
-		return 102;
-	}
-	if(channel==0)
-	{
-		return 122;
-	}
-	else
-	{
-		return 122;
-	}
-}
-float getAngleAmp()
-{
-	if(LCD_TYPE==0)
-		{
-			return 84;
-		}
-		return 90;
-}
-
-#define EOFS  40
-
-//#ifdef EYE
-uint8_t ftable[(240-EOFS*2)*(240-EOFS*2)];
-uint8_t ctable[256*2];
-//#endif
-
-int satur(int val,int minv,int maxv)
-{
-	return (val<minv)?minv:((val>maxv)?maxv:val);
-}
-struct rgb
-{
-	int R;
-	int G;
-	int B;
-};
-/**
- * Converts an HSV color value to RGB. Conversion formula
- * adapted from http://en.wikipedia.org/wiki/HSV_color_space.
- * Assumes h, s, and v are contained in the set [0, 1] and
- * returns r, g, and b in the set [0, 255].
- *
- * @param   Number  h       The hue
- * @param   Number  s       The saturation
- * @param   Number  v       The value
- * @return  Array           The RGB representation
- */
-int REF_COLOR =  120;
-struct rgb hsv2rgb(int H,float S,float V)
-{
-	struct rgb dt;
-
-	float h = H/360.0f;
-	float s = S*0.01f;
-	float v = V*0.01f;
-    float r,g,b;
-    int i = floorf(h * 6.0f);
-    float f = h * 6.0f - i;
-    float p = v * (1.0f - s);
-    float q = v * (1.0f - f * s);
-    float t = v * (1.0f - (1.0f - f) * s);
-
-    switch(i % 6){
-        case 0: r = v, g = t, b = p; break;
-        case 1: r = q, g = v, b = p; break;
-        case 2: r = p, g = v, b = t; break;
-        case 3: r = p, g = q, b = v; break;
-        case 4: r = t, g = p, b = v; break;
-        case 5: r = v, g = p, b = q; break;
-    }
-    dt.R = r*255;
-    dt.G = g*255;
-    dt.B = b*255;
-    return dt;
-}
-
-#define EOFS  40
-//#define EOFS  0
-//#define REF_COLOR 160
-//#define REF_COLOR 308
-//#define REF_COLOR 150
-//#define REF_COLOR 165
-
-void paintLevels(float level,int full)
-{
-	struct rgb base_color = hsv2rgb(REF_COLOR,95,30);
-	uint16_t   tc = color_convertRGB_to16d(base_color.R,base_color.G,base_color.B);
-#define RAMP 30
-	int lastPosNS = satur(level*210+RAMP/2+1,0,255+RAMP/2);
-	int lastPos = satur(lastPosNS,RAMP+1,255);
-
-	for(int colorv=lastPos;colorv<256;colorv++)
-	{
-		 ctable[colorv*2+0] = (tc>>8u)&0xffu;
-		 ctable[colorv*2+1] = tc&0xffu;
-	}
-	int df =lastPosNS-lastPos;
-    int offset = lastPosNS*4/100;
-	for(int colorv=1;colorv<lastPos-RAMP;colorv++)
-	{
-		struct rgb base_color = hsv2rgb(REF_COLOR,95,90-offset-1-RAMP);
-		uint16_t   tc = color_convertRGB_to16d(base_color.R,base_color.G,base_color.B);
-		 ctable[colorv*2+0] = (tc>>8u)&0xffu;
-		 ctable[colorv*2+1] = tc&0xffu;
-	}
-	for(int colorv=lastPos-RAMP;colorv<lastPos;colorv++)
-	{
-		struct rgb base_color = hsv2rgb(REF_COLOR,95,90-offset-1+colorv-lastPos);
-		uint16_t   tc = color_convertRGB_to16d(base_color.R,base_color.G,base_color.B);
-		 ctable[colorv*2+0] = (tc>>8u)&0xffu;
-		 ctable[colorv*2+1] = tc&0xffu;
-	}
-	//overshoot
-	if(df>0)
-	{
-		for(int colorv=255-df;colorv<256;colorv++)
-		{
-			int t = colorv-(255-df);
-			struct rgb base_color = hsv2rgb(REF_COLOR,95,100-t-offset);
-			uint16_t   tc = color_convertRGB_to16d(base_color.R,base_color.G,base_color.B);
-			ctable[colorv*2+0] = (tc>>8u)&0xffu;
-			ctable[colorv*2+1] = tc&0xffu;
-		}
-	}
-	if(full)
-	{
-		//LCD_fillRectDataTable(0, 0, LCD_getWidth(), LCD_getHeight(),ftable,ctable);
-		LCD_fillRect(0, 0, LCD_getWidth(), LCD_getHeight(),BLACK);
-		LCD_fillRectDataTable(EOFS, EOFS, LCD_getWidth()-EOFS*2, LCD_getHeight()-EOFS*2,ftable,ctable);
-	}
-	else
-	{
-		LCD_fillRectDataTable(EOFS, EOFS, LCD_getWidth()-EOFS*2, LCD_getHeight()-EOFS*2,ftable,ctable);
-	}
-
-}
-void tableSetup()
-{
-	//http://www.radiostation.ru/home/greeneye.html
-
-     vec2f center = {119.5,119.5 };
-     // normalized base vector up
-     vec2f base =   {0 ,1 };
-     for(int y=EOFS;y<240-EOFS;y++)
-     {
-    	 for(int x=EOFS;x<240-EOFS;x++)
-    	 {
-    		 float dx = (x - center.x);
-    		 float dy = (y - center.y);
-    		 float norma = sqrtf(dx*dx+dy*dy);
-    		 float cosAngle = base.x*dx+base.y*dy;
-    		 float angle = acosf(cosAngle/norma);
-    		 int pos = satur(256*angle/M_PI,1,254)+1;
-    		 if(norma<(240/2-EOFS)&&norma>30)
-    		 {
-    		   ftable[(y-EOFS)*(240-(EOFS*2))+x-EOFS] = pos;
-    		 }
-    		 else
-    		 {
-    			 ftable[(y-EOFS)*(240-(EOFS*2))+x-EOFS] = 0;
-    		 }
-    	 }
-     }
-     int Rca;
-     int Bca;
-     int Gca;
-
-
-}
-void tableSetup1()
-{
-
-     //vec2f center = {119.5,119.5 };
-     vec2f center = {119.5,239.5-EOFS };
-     float xf = 1.0/(120);
-     float yf = 1.0/(240-EOFS*2);
-     float cmin = 1000;
-     float cmax = -1000;
-     // normalized base vector up
-     vec2f base =   {0 ,-1 };
-     for(int y=EOFS;y<240-EOFS;y++)
-     {
-    	 for(int x=EOFS;x<240-EOFS;x++)
-    	 {
-    		 float dx = (x - center.x);
-    		 float dy = (y - center.y);
-    		 float norma = sqrtf(dx*dx+dy*dy);
-    		 float cosAngle = base.x*dx+base.y*dy;
-    		 float angle = acosf(cosAngle/norma)-0.3f*dx*dx*xf*xf;
-    		 int pos = 230.0f-1.25f*fabsf(1024.0f*angle/M_PI-192.0f);
-    		 if(pos<cmin) cmin = pos;
-    		 if(pos>cmax) cmax = pos;
-    		 pos = satur(pos,1,254)+1;
-    		 if(norma<(240-EOFS*2)&&norma>35&&x>EOFS&&x<240-EOFS&&y>EOFS&&y<240-EOFS)
-    		 {
-    		   ftable[(y-EOFS)*(240-(EOFS*2))+x-EOFS] = pos;
-    		 }
-    		 else
-    		 {
-    			 ftable[(y-EOFS)*(240-(EOFS*2))+x-EOFS] = 0;
-    		 }
-    	 }
-     }
-     int Rca;
-     int Bca;
-     int Gca;
-     printf("cmin=%f ,cmax=%f\n",cmin,cmax);
-
-}
 
 /* USER CODE END 0 */
 
@@ -1270,22 +1047,19 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  MX_USART1_UART_Init();
   MX_DMA_Init();
   MX_I2S2_Init();
-  MX_SPI1_Init();
   MX_SPI3_Init();
   MX_TIM1_Init();
   MX_TIM3_Init();
   MX_USB_DEVICE_Init();
   MX_TIM2_Init();
+  MX_USART2_UART_Init();
   /* USER CODE BEGIN 2 */
   //0 1 2 3 0
-#if (NUMBER_OF_LCD)
-  LCD_reset();
-#endif
 
   printf("\nStart program\n");
+
   HAL_TIM_Encoder_Start(&htim2, TIM_CHANNEL_ALL);
   cleanAudioBuffer();
   TIM3->PSC  = (int)(SYS_CLK_MHZ*1000000.0f/TIMER_CLOCK_FREQ)-1;
@@ -1309,236 +1083,29 @@ int main(void)
 #endif
   printf("Start Speed %x\n",readSpeedXScaled);
   printf("Freq  = %f,sSpeed= %x %04d %04d %04d speed=%x\n",SYS_CLK_MHZ*1000000.0/(MAX_VOL),sForcedSpeed,HalfTransfer_CallBack_FS_Counter,TransferComplete_CallBack_FS_Counter,AUDIO_PeriodicTC_FS_Counter,readSpeedXScaled);
-  int  mode = 2;
-#if (NUMBER_OF_LCD)
-	  for(int l=0;l<NUMBER_OF_LCD;l++)
-	  {
-		  printf("Start LCD %d\n",l);
-
-		  if(LCD_TYPE==0||l==0)
-		  {
-			  setLCD(l);
-			  LCD_init();
-			  LCD_setRotation(PORTRAIT_FLIP);
-			  {
-					uint32_t trt = HAL_GetTick();
-if (mode==3||mode==4)
-{
-			paintLevels(0.0,1);
-}
-else
-{
-	  LCD_setRotation(PORTRAIT_FLIP);
-//	  for(int kkk=0;kkk<20;kkk++)
-//	  {
-//		  LCD_fillRect(0, 0, LCD_getWidth(), LCD_getHeight(),rand());
-//	  }
-//	  LCD_setRotation(PORTRAIT_FLIP);
-//	  for(int kkk=0;kkk<20;kkk++)
-//	  {
-//		  LCD_fillRect(0, 0, LCD_getWidth(), LCD_getHeight(),rand());
-//	  }
-			LCD_fillRectData(0, 0, LCD_getWidth(), LCD_getHeight(),getLCD_Data());
-}
-					trt = (HAL_GetTick()-trt);
-					printf("SCR_FULL %d uS\n",trt*1000);
-
-			  }
-		  }
-	  }
-#endif
-  int pcXe_OLD[2]={-1,-1};
-  int pcYe_OLD[2]={-1,-1};
-  int pcX_OLD[2]={-1,-1};
-  int pcY_OLD[2]={-1,-1};
-  float elapsed_time = 0;
-  int  elapsed_time_ticks = 0;
-  int32_t prev_tick = 0;
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   //int timcnt =0;
   int ko = 0;
+  printf("freq = %d hz \n",frequency);
+
   while (1)
   {
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
-	  //timcnt++;
-	  // mode = 0 display off
-	  // mode = 1 display 2 ma
-	  // mode = 2 display  6E5C
-	  // mode = 3 display  6Е1П
-	  REF_COLOR = (((uint16_t)TIM2->CNT)+120)%360;
-	  if(HAL_GetTick()/2048!=ko)
+	  if(HAL_GetTick()/204!=ko)
 	  {
-		  ko = HAL_GetTick()/2048;
-	  // printf("%04d %04d %04d %04d %04d\n",HalfTransfer_CallBack_FS_Counter,TransferComplete_CallBack_FS_Counter,AUDIO_PeriodicTC_FS_Counter,AUDIO_OUT_Play_Counter,AUDIO_OUT_ChangeBuffer_Counter);
-		  printf("MAX_VOL = %d INSpeed=%0.01f Hz outSpeed=%0.01f Hz %x Delta %d SMPInH %d elaps = %d mS,ForcedSpeed = %x  %04d PLLspeed = %x %01d %07d s=%d \n",MAX_VOL,inputSpeed,(TIMER_CLOCK_FREQ*(float)outDmaSpeedScaled)/TIME_SCALE_FACT,outDmaSpeedScaled,appDistErr,samplesInBuffH,elapsed_time_ticks,sForcedSpeed,AUDIO_PeriodicTC_FS_Counter,readSpeedXScaled,HAL_GPIO_ReadPin(KEY_GPIO_Port,KEY_Pin),TIM2->CNT,UsbSamplesAvail);
-
-  }
-#if   NUMBER_OF_LCD > 0
-	  if(HAL_GPIO_ReadPin(KEY_GPIO_Port,KEY_Pin)==0 )
-	  {
-		 mode = (mode+1)%5;
-		 if(mode==0)
-		 {
-			 HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_RESET);
-   		     LCD_reset();
-			 HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_RESET);
-		 }
-		 else if(mode==1)
-		 {
-			  LCD_TYPE = 0;
-			  for(int l=0;l<NUMBER_OF_LCD;l++)
-			  {
-				  pcXe_OLD[l] = -1;
-				  if(LCD_TYPE==0||l==0)
-				  {
-				  setLCD(l);
-				  LCD_init();
-				  LCD_setRotation(PORTRAIT_FLIP);
-				  LCD_fillRectData(0, 0, LCD_getWidth(), LCD_getHeight(),getLCD_Data());
-				  }
-			  }
-			 HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_SET);
-		 }
-		 else if(mode==2)
-		 {
-			  LCD_TYPE = 1;
-			  for(int l=0;l<NUMBER_OF_LCD;l++)
-			  {
-				  pcXe_OLD[l] = -1;
-				  if(LCD_TYPE==0||l==0)
-				  {
-				  setLCD(l);
-				  LCD_init();
-				  LCD_setRotation(PORTRAIT_FLIP);
-				  LCD_fillRectData(0, 0, LCD_getWidth(), LCD_getHeight(),getLCD_Data());
-				  }
-			  }
-			 HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_SET);
-		 }
-		 else if(mode==3)
-		 {
-			tableSetup();
-			paintLevels(0.0,1);
-
-		 }
-		 else if(mode==4)
-		 {
-			  tableSetup1();
-			  paintLevels(0.0,1);
-		 }
-		 HAL_Delay(100);
+		  ko = HAL_GetTick()/204;
+		  // printf("%04d %04d %04d %04d %04d\n",HalfTransfer_CallBack_FS_Counter,TransferComplete_CallBack_FS_Counter,AUDIO_PeriodicTC_FS_Counter,AUDIO_OUT_Play_Counter,AUDIO_OUT_ChangeBuffer_Counter);
+		  //printf("MAX_VOL = %d INSpeed=%0.01f Hz outSpeed=%0.01f Hz %x Delta %d SMPInH %d elaps = %d mS,ForcedSpeed = %x  %04d PLLspeed = %x %01d %07d s=%d \n",MAX_VOL,inputSpeed,(TIMER_CLOCK_FREQ*(float)outDmaSpeedScaled)/TIME_SCALE_FACT,outDmaSpeedScaled,appDistErr,samplesInBuffH,elapsed_time_ticks,sForcedSpeed,AUDIO_PeriodicTC_FS_Counter,readSpeedXScaled,HAL_GPIO_ReadPin(KEY_GPIO_Port,KEY_Pin),TIM2->CNT,UsbSamplesAvail);
+		  uint32_t out = frequency;
+		  printf("freq = %d Hz \n",out/100);
 	  }
-		//ampL = (ampL*15)/(16);
-		//ampR = (ampR*15)/(16);
-	  if(mode!=0)
-	  {
-			//LCD_fillRectData(0, 0, LCD_getWidth(), LCD_getHeight(),getImageData());
-		    uint32_t trt = HAL_GetTick();
-		    int deltaTicks = trt - prev_tick;
-		    prev_tick = trt;
-		    //300 millisecond
-//#define decayFact (-1.0f/300)
-#define decayFact (-1.0f/600)
-#define OVER_AMPL   1.5f
-		float decay = expf(deltaTicks*decayFact);
-		if(mode==3||mode==4)
-		{
-			float factMaxInputEnergy_inv = OVER_AMPL/((1<<USB_DATA_BITS_H)*2/sqrt(2));
-			float ampl = (ampR+ampL)*0.5f*factMaxInputEnergy_inv;
-			ampl = logf(ampl*(expf(1.0f)-1.0f)+1.0f);
-			//if(ampl>1.0f) ampl = 1.0f;
-		    paintLevels(ampl*1.0f,0);
-		}
-		else
-		{
-		    for(int l=0;l<NUMBER_OF_LCD;l++)
-		    {
-		    	if(LCD_TYPE==0||l==0)
-		    		setLCD(l);
-
-		    	vec2f pixelCenterRot = getPixelCenterRot(l);
-		    	float arrowLength  = getPixelLength(l);
-				vec2f vc = {arrowLength,0.0f};
-				mat4f mt;
-				float factMaxInputEnergy_inv = OVER_AMPL/((1<<USB_DATA_BITS_H)*2/sqrt(2));
-				float ampl = ((l==0)?ampL:ampR)* factMaxInputEnergy_inv;
-#if (NUMBER_OF_LCD==1 && LCD_TYPE==0)
-					ampl = (ampR+ampL)*0.5f*factMaxInputEnergy_inv;
-#endif
-				ampl = logf(ampl*(expf(1.0f)-1.0f)+1.0f);
-				if(ampl>1.0f) ampl = 1.0f;
-				//if(ampl<0.0f) ampl = 0.0f;
-				float ANGLE_AMP = getAngleAmp();
-				makeRotMat(mt,(90+ANGLE_AMP/2-ANGLE_AMP*ampl)/180*((float)M_PI));
-				vec2f vcA = applyMat(mt,vc);
-				//printMat(mt);
-				//printVec(vc);
-				///printVec(vcA);
-				int pcX = pixelCenterRot.x;
-				int pcY = pixelCenterRot.y;
-				int pcXe = (int)(pcX+vcA.x);  //arrowEnd
-				int pcYe = (int)(pcY-vcA.y);  //arrowEnd
-
-				int pcXs = (int)(pcX+vcA.x*(LCD_TYPE==0?0.22f:0.35f));//arrowStart
-				int pcYs = (int)(pcY-vcA.y*(LCD_TYPE==0?0.22f:0.35f));//arrowStart
-				//if(!(pcXe_OLD[l] == pcXe && pcYe_OLD[l] == pcYe))
-				{
-					if(pcXe_OLD[l]>0)
-					{
-						LCD_Draw_LinePNX(pcX_OLD[l]-2-5,pcY_OLD[l],pcXe_OLD[l]-2-5,pcYe_OLD[l],240,4,getLCD_Data());
-						LCD_Draw_LinePNX(pcX_OLD[l]-2,pcY_OLD[l],pcXe_OLD[l]-2,pcYe_OLD[l],240,4,getLCD_Data());
-					}
-					if(pcXe_OLD[l]>0)
-					{
-					}
-					LCD_Draw_LinePNXShadow(pcXs-2-5,pcYs,pcXe-2-5,pcYe,240,4,getLCD_Data());
-					//LCD_Draw_LinePNX(pcXs-2-5,pcYs,pcXe-2-5,pcYe,240,4,getImageDarkData());
-
-					uint16_t colors [4];
-					if(LCD_TYPE==0||1)
-					{
-					colors[0] = color_convertRGB_to16d(0x3e + 20,0x27 + 20,0x2f + 20);
-					colors[1] = color_convertRGB_to16d(0xd1/2,0x26/2,0x64/2);
-					colors[2] = color_convertRGB_to16d(0xd1,0x26,0x64);
-					colors[3] = color_convertRGB_to16d(0x3e,0x27,0x2f);
-					}
-					else
-					{
-						colors[0] = color_convertRGB_to16d(0x3e + 20,0x27 + 20,0x2f + 20);
-						colors[1] = color_convertRGB_to16d(38,38,41);
-						colors[2] = color_convertRGB_to16d(38,38,41);
-						colors[3] = color_convertRGB_to16d(0x3e,0x27,0x2f);
-					}
-					LCD_Draw_LineNX(pcXs-2,pcYs,pcXe-2,pcYe,4,(uint8_t*) colors);
-				}
-
-//				LCD_Draw_Line(pcX-2,pcY,pcXe-2,pcYe,RED);
-//				LCD_Draw_Line(pcX-1,pcY,pcXe-1,pcYe,BLACK);
-//				LCD_Draw_Line(pcX,pcY,pcXe,pcYe,BLACK);
-//				LCD_Draw_Line(pcX+1,pcY,pcXe+1,pcYe,RED);
-
-				 pcX_OLD[l] = pcXs;
-				 pcY_OLD[l] = pcYs;
-				 pcXe_OLD[l] = pcXe;
-				 pcYe_OLD[l] = pcYe;
-		    }
-			//printf(txt,"%03d %03d\n",ampL,ampR);
-			//LCD_Draw_Text(txt,0,0,GREEN, 2,BLACK);
-		}
-		elapsed_time_ticks = HAL_GetTick() - trt;
-		HAL_Delay(30);
-		ampL =ampL*decay;
-		ampR =ampR*decay;
-	  }
-  }
-  HAL_Delay(2);
-#endif
-  /* USER CODE END 3 */
+	  /* USER CODE END 3 */
+}
 }
 
 /**
@@ -1554,6 +1121,7 @@ void SystemClock_Config(void)
   */
   __HAL_RCC_PWR_CLK_ENABLE();
   __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE2);
+
   /** Initializes the RCC Oscillators according to the specified parameters
   * in the RCC_OscInitTypeDef structure.
   */
@@ -1561,7 +1129,7 @@ void SystemClock_Config(void)
   RCC_OscInitStruct.HSEState = RCC_HSE_ON;
   RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
   RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSE;
-  RCC_OscInitStruct.PLL.PLLM = 25;
+  RCC_OscInitStruct.PLL.PLLM = 8;
   RCC_OscInitStruct.PLL.PLLN = 336;
   RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV4;
   RCC_OscInitStruct.PLL.PLLQ = 7;
@@ -1569,6 +1137,7 @@ void SystemClock_Config(void)
   {
     Error_Handler();
   }
+
   /** Initializes the CPU, AHB and APB buses clocks
   */
   RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
@@ -1615,44 +1184,6 @@ static void MX_I2S2_Init(void)
   /* USER CODE BEGIN I2S2_Init 2 */
 
   /* USER CODE END I2S2_Init 2 */
-
-}
-
-/**
-  * @brief SPI1 Initialization Function
-  * @param None
-  * @retval None
-  */
-static void MX_SPI1_Init(void)
-{
-
-  /* USER CODE BEGIN SPI1_Init 0 */
-
-  /* USER CODE END SPI1_Init 0 */
-
-  /* USER CODE BEGIN SPI1_Init 1 */
-
-  /* USER CODE END SPI1_Init 1 */
-  /* SPI1 parameter configuration*/
-  hspi1.Instance = SPI1;
-  hspi1.Init.Mode = SPI_MODE_MASTER;
-  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
-  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
-  hspi1.Init.CLKPolarity = SPI_POLARITY_HIGH;
-  hspi1.Init.CLKPhase = SPI_PHASE_2EDGE;
-  hspi1.Init.NSS = SPI_NSS_SOFT;
-  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_2;
-  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
-  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
-  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
-  hspi1.Init.CRCPolynomial = 10;
-  if (HAL_SPI_Init(&hspi1) != HAL_OK)
-  {
-    Error_Handler();
-  }
-  /* USER CODE BEGIN SPI1_Init 2 */
-
-  /* USER CODE END SPI1_Init 2 */
 
 }
 
@@ -1925,35 +1456,35 @@ static void MX_TIM3_Init(void)
 }
 
 /**
-  * @brief USART1 Initialization Function
+  * @brief USART2 Initialization Function
   * @param None
   * @retval None
   */
-static void MX_USART1_UART_Init(void)
+static void MX_USART2_UART_Init(void)
 {
 
-  /* USER CODE BEGIN USART1_Init 0 */
+  /* USER CODE BEGIN USART2_Init 0 */
 
-  /* USER CODE END USART1_Init 0 */
+  /* USER CODE END USART2_Init 0 */
 
-  /* USER CODE BEGIN USART1_Init 1 */
+  /* USER CODE BEGIN USART2_Init 1 */
 
-  /* USER CODE END USART1_Init 1 */
-  huart1.Instance = USART1;
-  huart1.Init.BaudRate = 115200;
-  huart1.Init.WordLength = UART_WORDLENGTH_8B;
-  huart1.Init.StopBits = UART_STOPBITS_1;
-  huart1.Init.Parity = UART_PARITY_NONE;
-  huart1.Init.Mode = UART_MODE_TX_RX;
-  huart1.Init.HwFlowCtl = UART_HWCONTROL_NONE;
-  huart1.Init.OverSampling = UART_OVERSAMPLING_16;
-  if (HAL_UART_Init(&huart1) != HAL_OK)
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
   {
     Error_Handler();
   }
-  /* USER CODE BEGIN USART1_Init 2 */
+  /* USER CODE BEGIN USART2_Init 2 */
 
-  /* USER CODE END USART1_Init 2 */
+  /* USER CODE END USART2_Init 2 */
 
 }
 
@@ -1991,6 +1522,8 @@ static void MX_DMA_Init(void)
 static void MX_GPIO_Init(void)
 {
   GPIO_InitTypeDef GPIO_InitStruct = {0};
+/* USER CODE BEGIN MX_GPIO_Init_1 */
+/* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
   __HAL_RCC_GPIOC_CLK_ENABLE();
@@ -1999,41 +1532,39 @@ static void MX_GPIO_Init(void)
   __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(LED_GPIO_Port, LED_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, LED_Pin|DUMMY_OUT_Pin, GPIO_PIN_RESET);
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOA, LCD1_CMD_Pin|DUMMY_OUT_Pin, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(MUTE_OUT_GPIO_Port, MUTE_OUT_Pin, GPIO_PIN_RESET);
 
-  /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, MUTE_OUT_Pin|LCD_CMD_Pin|LCD_RESET_Pin|LCD_BL_Pin, GPIO_PIN_RESET);
-
-  /*Configure GPIO pin : LED_Pin */
-  GPIO_InitStruct.Pin = LED_Pin;
-  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_OD;
-  GPIO_InitStruct.Pull = GPIO_NOPULL;
-  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(LED_GPIO_Port, &GPIO_InitStruct);
-
-  /*Configure GPIO pin : KEY_Pin */
-  GPIO_InitStruct.Pin = KEY_Pin;
+  /*Configure GPIO pin : BUTTON_Pin */
+  GPIO_InitStruct.Pin = BUTTON_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
-  GPIO_InitStruct.Pull = GPIO_PULLUP;
-  HAL_GPIO_Init(KEY_GPIO_Port, &GPIO_InitStruct);
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(BUTTON_GPIO_Port, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : LCD1_CMD_Pin DUMMY_OUT_Pin */
-  GPIO_InitStruct.Pin = LCD1_CMD_Pin|DUMMY_OUT_Pin;
+  /*Configure GPIO pins : LED_Pin DUMMY_OUT_Pin */
+  GPIO_InitStruct.Pin = LED_Pin|DUMMY_OUT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
 
-  /*Configure GPIO pins : MUTE_OUT_Pin LCD_CMD_Pin LCD_RESET_Pin LCD_BL_Pin */
-  GPIO_InitStruct.Pin = MUTE_OUT_Pin|LCD_CMD_Pin|LCD_RESET_Pin|LCD_BL_Pin;
+  /*Configure GPIO pin : MUTE_OUT_Pin */
+  GPIO_InitStruct.Pin = MUTE_OUT_Pin;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
-  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+  HAL_GPIO_Init(MUTE_OUT_GPIO_Port, &GPIO_InitStruct);
 
+  /*Configure GPIO pin : KEY_Pin */
+  GPIO_InitStruct.Pin = KEY_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(KEY_GPIO_Port, &GPIO_InitStruct);
+
+/* USER CODE BEGIN MX_GPIO_Init_2 */
+/* USER CODE END MX_GPIO_Init_2 */
 }
 
 /* USER CODE BEGIN 4 */
@@ -2044,6 +1575,7 @@ static void MX_GPIO_Init(void)
   * @brief  This function is executed in case of error occurrence.
   * @retval None
   */
+
 void Error_Handler(void)
 {
   /* USER CODE BEGIN Error_Handler_Debug */
@@ -2071,5 +1603,3 @@ void assert_failed(uint8_t *file, uint32_t line)
   /* USER CODE END 6 */
 }
 #endif /* USE_FULL_ASSERT */
-
-/************************ (C) COPYRIGHT STMicroelectronics *****END OF FILE****/

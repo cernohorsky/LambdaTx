@@ -69,49 +69,6 @@ void setSPI(SPI_HandleTypeDef* spi_inp, GPIO_TypeDef *cmd_port,uint32_t cmd_pin)
 }
 int oldNum  = -1;
 
-void setLCD(int num)
-{
-	if(oldNum==num)
-	{
-	}
-	else
-	{
-		if(oldNum!=-1)
-		{
-		//	writecommand(ST7789_NOP);
-		//	writedata(0);
-		}
-		else
-		{
-			//setSPI(hspi1,LCD_CMD_GPIO_Port,LCD_CMD_Pin);
-			//LCD_DC_1;
-			//setSPI(hspi1,LCD1_CMD_GPIO_Port,LCD1_CMD_Pin);
-			//LCD_DC_1;
-		}
-		if(num==0)
-		{
-			setSPI(&hspi3,LCD_CMD_GPIO_Port,LCD_CMD_Pin);
-			//setSPI(hspi1,LCD_CMD_GPIO_Port,LCD_CMD_Pin);
-		}
-		else
-		{
-			setSPI(&hspi1,LCD1_CMD_GPIO_Port,LCD1_CMD_Pin);
-		}
-		oldNum = num;
-	}
-}
-
-
-#define LCD_RES_0   HAL_GPIO_WritePin(LCD_RESET_GPIO_Port, LCD_RESET_Pin,GPIO_PIN_RESET);
-#define LCD_RES_1   HAL_GPIO_WritePin(LCD_RESET_GPIO_Port, LCD_RESET_Pin,GPIO_PIN_SET);
-
-
-
-#define LCD_BL_0   HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_RESET);
-#define LCD_BL_1   HAL_GPIO_WritePin(LCD_BL_GPIO_Port, LCD_BL_Pin,GPIO_PIN_SET);
-
-//#define LCD_CLK_0    CLK_GPIO_Port->BSRR = CLK_Pin<<16;
-//#define LCD_CLK_1    CLK_GPIO_Port->BSRR = CLK_Pin;
 
 
 #define SpixTimeout 1000
@@ -270,54 +227,7 @@ void displayInit(const uint8_t *addr) {
     }
   }
 }
-void LCD_reset()
-{
-	LCD_BL_1;
-	LCD_RES_1;
-    Delay(5);
-	LCD_RES_0;
-    Delay(15);
-	LCD_RES_1;
-    Delay(150);
-}
 
-void LCD_init()
-{
-    displayInit(cmd_240x240);
-    setRotation(2);
-}
-void setRotation(uint8_t m) {
-
-  writecommand(ST7789_MADCTL);
-  int rotation = m % 4; // can't be higher than 3
-  switch (rotation) {
-   case PORTRAIT:
-     writedata(ST7789_MADCTL_MX | ST7789_MADCTL_MY | ST7789_MADCTL_RGB);
-
-     _xstart = 0;
-     _ystart = 320-240;//_rowstart;
-     break;
-   case LANDSCAPE:
-     writedata(ST7789_MADCTL_MY | ST7789_MADCTL_MV | ST7789_MADCTL_RGB);
-
-     _ystart = 0;
-     _xstart = 320-240;//_rowstart;
-     break;
-  case PORTRAIT_FLIP:
-     writedata(ST7789_MADCTL_RGB);
-
-     _xstart = 0;
-     _ystart = 0;
-     break;
-
-   case LANDSCAPE_FLIP:
-     writedata(ST7789_MADCTL_MX | ST7789_MADCTL_MV | ST7789_MADCTL_RGB);
-
-     _ystart = 0;
-     _xstart = 0;
-     break;
-  }
-}
 #define READ_WSPI(x) {while(!((SPIH->Instance->SR) & SPI_FLAG_RXNE));x= *((__IO uint8_t*)&SPIH->Instance->DR);}
 
 void setAddrWindow(uint8_t x0, uint8_t y0, uint8_t x1, uint8_t y1)
