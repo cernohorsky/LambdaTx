@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <projectDescription>
-	<name>stm32f401cdu6_Audio</name>
+	<name>LambdaTx</name>
 	<comment></comment>
 	<projects>
 	</projects>
@@ -191,4 +191,10 @@
 			<locationURI>PARENT-4-PROJECT_LOC/STM32Cube/Repository/STM32Cube_FW_F4_V1.27.1/Middlewares/ST/STM32_USB_Device_Library/Core/Src/usbd_ioreq.c</locationURI>
 		</link>
 	</linkedResources>
+	<variableList>
+		<variable>
+			<name>copy_PARENT</name>
+			<value>$%7BPARENT-3-PROJECT_LOC%7D</value>
+		</variable>
+	</variableList>
 </projectDescription>

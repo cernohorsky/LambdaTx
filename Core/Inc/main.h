@@ -70,14 +70,14 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define KEY_Pin GPIO_PIN_13
-#define KEY_GPIO_Port GPIOC
+#define Button_Pin GPIO_PIN_13
+#define Button_GPIO_Port GPIOC
 #define LED_Pin GPIO_PIN_5
 #define LED_GPIO_Port GPIOA
 #define MUTE_OUT_Pin GPIO_PIN_2
 #define MUTE_OUT_GPIO_Port GPIOB
-#define KEYB14_Pin GPIO_PIN_14
-#define KEYB14_GPIO_Port GPIOB
+#define KEY_Pin GPIO_PIN_14
+#define KEY_GPIO_Port GPIOB
 #define DUMMY_OUT_Pin GPIO_PIN_10
 #define DUMMY_OUT_GPIO_Port GPIOA
 
